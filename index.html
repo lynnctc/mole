@@ -1,0 +1,1263 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Whack-a-Mole — 手勢打地鼠</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Bungee&family=Fraunces:opsz,wght@9..144,300;9..144,800&display=swap" rel="stylesheet">
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+  :root {
+    --bg: #1a0f08;
+    --soil: #4a2c1a;
+    --soil-light: #6b3f24;
+    --grass: #5a8a2c;
+    --grass-dark: #3d6019;
+    --fg: #fff8e7;
+    --accent: #ffb627;
+    --danger: #e63946;
+    --line: rgba(255, 248, 231, 0.15);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Fraunces', Georgia, serif;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+  }
+
+  .app {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+  }
+
+  /* === HUD === */
+  header {
+    padding: 0.8rem 1.2rem;
+    border-bottom: 2px solid var(--soil-light);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background: linear-gradient(180deg, #2a1810 0%, #1a0f08 100%);
+    z-index: 5;
+    position: relative;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .brand-mark {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    color: var(--accent);
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+  }
+
+  .brand-title {
+    font-family: 'Bungee', sans-serif;
+    font-size: 1.1rem;
+    letter-spacing: 0.02em;
+    color: var(--fg);
+    text-transform: uppercase;
+  }
+
+  .brand-title span {
+    color: var(--accent);
+  }
+
+  .score-board {
+    display: flex;
+    gap: 0.8rem;
+    align-items: stretch;
+  }
+
+  .score-box {
+    text-align: right;
+    padding: 0.15rem 0.6rem;
+    border-left: 1px solid var(--line);
+  }
+
+  .score-box:first-child { border-left: none; }
+
+  .score-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.55rem;
+    letter-spacing: 0.2em;
+    color: rgba(255, 248, 231, 0.5);
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 0.1rem;
+  }
+
+  .score-value {
+    font-family: 'Bungee', sans-serif;
+    font-size: 1.4rem;
+    line-height: 1;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .score-value.score { color: var(--accent); }
+  .score-value.miss { color: var(--danger); }
+
+  .score-value.flash {
+    animation: scoreFlash 0.35s ease;
+  }
+
+  @keyframes scoreFlash {
+    0% { transform: scale(1.5); }
+    100% { transform: scale(1); }
+  }
+
+  /* === 主畫面 === */
+  main {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+
+  video { display: none; }
+
+  canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  #cameraCanvas { z-index: 1; opacity: 0.45; filter: saturate(0.6) brightness(0.7); }
+  #gameCanvas   { z-index: 2; }
+
+  /* 開始 / 結束 覆蓋層 */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(26, 15, 8, 0.92);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    z-index: 10;
+    backdrop-filter: blur(10px);
+  }
+
+  .overlay.hidden { display: none; }
+
+  .overlay-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.3em;
+    color: var(--accent);
+    margin-bottom: 1.2rem;
+  }
+
+  .overlay-title {
+    font-family: 'Bungee', sans-serif;
+    font-size: clamp(2.5rem, 9vw, 5rem);
+    line-height: 1;
+    letter-spacing: 0.01em;
+    margin-bottom: 1.2rem;
+    text-transform: uppercase;
+  }
+
+  .overlay-title .accent { color: var(--accent); }
+
+  .overlay-desc {
+    font-size: 0.95rem;
+    color: rgba(255, 248, 231, 0.7);
+    max-width: 32ch;
+    line-height: 1.6;
+    margin-bottom: 2rem;
+  }
+
+  .moles-legend {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: rgba(255, 248, 231, 0.6);
+  }
+
+  .legend-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .legend-dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+  }
+
+  .legend-mole { background: #8b5a2b; box-shadow: inset -3px -3px 0 #5a3a1c; }
+  .legend-gold { background: #ffb627; box-shadow: inset -3px -3px 0 #b8801a; }
+  .legend-bomb { background: #2a2a2a; box-shadow: inset -3px -3px 0 #000; }
+
+  .game-btn {
+    font-family: 'Bungee', sans-serif;
+    font-size: 1rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--bg);
+    background: var(--accent);
+    border: none;
+    padding: 1rem 2.5rem;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    box-shadow: 0 4px 0 #b8801a;
+  }
+
+  .game-btn:hover, .game-btn:active {
+    transform: translateY(2px);
+    box-shadow: 0 2px 0 #b8801a;
+  }
+
+  .game-btn:disabled {
+    opacity: 0.4;
+    cursor: wait;
+  }
+
+  .game-btn.secondary {
+    background: transparent;
+    color: var(--fg);
+    border: 2px solid var(--line);
+    box-shadow: none;
+    margin-top: 0.8rem;
+    padding: 0.8rem 2rem;
+    font-size: 0.8rem;
+  }
+
+  .game-btn.secondary:hover, .game-btn.secondary:active {
+    transform: none;
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .error-msg {
+    margin-top: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--danger);
+    max-width: 36ch;
+  }
+
+  .final-score {
+    font-family: 'Bungee', sans-serif;
+    font-size: clamp(4rem, 18vw, 9rem);
+    color: var(--accent);
+    line-height: 1;
+    margin: 0.5rem 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 倒數 */
+  .countdown {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9;
+    pointer-events: none;
+  }
+
+  .countdown.hidden { display: none; }
+
+  .countdown-num {
+    font-family: 'Bungee', sans-serif;
+    font-size: clamp(8rem, 25vw, 16rem);
+    color: var(--accent);
+    line-height: 1;
+    text-shadow: 0 0 60px rgba(255, 182, 39, 0.7);
+    animation: countPop 1s ease forwards;
+  }
+
+  @keyframes countPop {
+    0%   { transform: scale(0.4) rotate(-15deg); opacity: 0; }
+    30%  { transform: scale(1.15) rotate(0); opacity: 1; }
+    70%  { transform: scale(1) rotate(0); opacity: 1; }
+    100% { transform: scale(1.6) rotate(10deg); opacity: 0; }
+  }
+
+  /* === 底部 === */
+  footer {
+    padding: 0.6rem 1.2rem;
+    border-top: 2px solid var(--soil-light);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    color: rgba(255, 248, 231, 0.5);
+    background: linear-gradient(0deg, #2a1810 0%, #1a0f08 100%);
+    flex-wrap: wrap;
+    z-index: 5;
+    position: relative;
+  }
+
+  .stats { display: flex; gap: 1.2rem; flex-wrap: wrap; }
+  .stat { display: flex; gap: 0.4rem; }
+  .stat-value { color: var(--fg); }
+  .stat-value.live { color: var(--accent); }
+
+  .ctrl-btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--fg);
+    padding: 0.4rem 0.8rem;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+
+  .ctrl-btn:hover, .ctrl-btn:active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  @media (max-width: 600px) {
+    header { padding: 0.6rem 0.9rem; }
+    .brand-title { font-size: 0.9rem; }
+    .score-value { font-size: 1.15rem; }
+    .score-box { padding: 0.15rem 0.45rem; }
+    footer { padding: 0.5rem 0.9rem; font-size: 0.65rem; }
+    .stats { gap: 0.8rem; }
+    .moles-legend { gap: 1rem; }
+  }
+</style>
+</head>
+
+<body>
+<div class="app">
+
+  <header>
+    <div class="brand">
+      <span class="brand-mark">WAM</span>
+      <span class="brand-title">Whack <span>·</span> A <span>·</span> Mole</span>
+    </div>
+    <div class="score-board">
+      <div class="score-box">
+        <span class="score-label">Time</span>
+        <span class="score-value" id="timeValue">45</span>
+      </div>
+      <div class="score-box">
+        <span class="score-label">Miss</span>
+        <span class="score-value miss" id="missValue">0/5</span>
+      </div>
+      <div class="score-box">
+        <span class="score-label">Score</span>
+        <span class="score-value score" id="scoreValue">0</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="stage">
+      <video id="input" playsinline></video>
+      <canvas id="cameraCanvas"></canvas>
+      <canvas id="gameCanvas"></canvas>
+
+      <div class="countdown hidden" id="countdown">
+        <div class="countdown-num" id="countdownNum">3</div>
+      </div>
+
+      <div class="overlay" id="startOverlay">
+        <div class="overlay-eyebrow">HAND TRACKING · WHACK</div>
+        <h1 class="overlay-title">Whack the <span class="accent">Moles</span></h1>
+        <p class="overlay-desc">用手揮打從洞口冒出的地鼠！金色地鼠加倍得分，黑色炸彈千萬別碰，漏掉 5 隻就遊戲結束。</p>
+        <div class="moles-legend">
+          <div class="legend-item">
+            <div class="legend-dot legend-mole"></div>
+            <div>+10</div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-dot legend-gold"></div>
+            <div>+50</div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-dot legend-bomb"></div>
+            <div>−30</div>
+          </div>
+        </div>
+        <button class="game-btn" id="startBtn">啟動鏡頭</button>
+        <div class="error-msg" id="errorMsg"></div>
+      </div>
+
+      <div class="overlay hidden" id="endOverlay">
+        <div class="overlay-eyebrow" id="endEyebrow">TIME'S UP</div>
+        <div class="final-score" id="finalScore">0</div>
+        <p class="overlay-desc">
+          <span id="finalStats">— moles whacked</span>
+        </p>
+        <button class="game-btn" id="restartBtn">再玩一次</button>
+        <button class="game-btn secondary" id="quitBtn">結束遊戲</button>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="stats">
+      <div class="stat"><span>STATUS</span><span class="stat-value" id="statStatus">— idle</span></div>
+      <div class="stat"><span>FPS</span><span class="stat-value live" id="statFps">00</span></div>
+      <div class="stat"><span>HANDS</span><span class="stat-value live" id="statHands">0</span></div>
+    </div>
+    <button class="ctrl-btn" id="stopBtn" style="display:none">QUIT</button>
+  </footer>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+//  裝置偵測
+// ─────────────────────────────────────────────
+const ua = navigator.userAgent;
+const isMobile = /iPhone|Android.*Mobile|Windows Phone/i.test(ua);
+const isTablet = /iPad|Android(?!.*Mobile)|Tablet/i.test(ua);
+
+// ─────────────────────────────────────────────
+//  DOM
+// ─────────────────────────────────────────────
+const video        = document.getElementById('input');
+const camCanvas    = document.getElementById('cameraCanvas');
+const camCtx       = camCanvas.getContext('2d');
+const gameCanvas   = document.getElementById('gameCanvas');
+const gctx         = gameCanvas.getContext('2d');
+
+const startOverlay = document.getElementById('startOverlay');
+const endOverlay   = document.getElementById('endOverlay');
+const endEyebrow   = document.getElementById('endEyebrow');
+const countdown    = document.getElementById('countdown');
+const countdownNum = document.getElementById('countdownNum');
+
+const startBtn     = document.getElementById('startBtn');
+const restartBtn   = document.getElementById('restartBtn');
+const quitBtn      = document.getElementById('quitBtn');
+const stopBtn      = document.getElementById('stopBtn');
+const errorMsg     = document.getElementById('errorMsg');
+
+const scoreValue   = document.getElementById('scoreValue');
+const missValue    = document.getElementById('missValue');
+const timeValue    = document.getElementById('timeValue');
+const finalScore   = document.getElementById('finalScore');
+const finalStats   = document.getElementById('finalStats');
+
+const statStatus   = document.getElementById('statStatus');
+const statFps      = document.getElementById('statFps');
+const statHands    = document.getElementById('statHands');
+
+// ─────────────────────────────────────────────
+//  常數 / 狀態
+// ─────────────────────────────────────────────
+const GAME_DURATION = 45;
+const MAX_MISSES = 5;
+const HAND_POINTS = [0, 4, 8, 12, 16, 20];
+const HOLE_GRID = { cols: 3, rows: 3 };
+
+let camera = null;
+let frameCount = 0;
+let lastFpsTime = performance.now();
+
+let gameState = 'idle';
+let score = 0;
+let misses = 0;
+let molesWhacked = 0;
+let goldenWhacked = 0;
+let timeLeft = GAME_DURATION;
+let gameStartTime = 0;
+let lastSpawnTime = 0;
+let spawnInterval = 1100;
+
+const holes = [];
+const moles = [];      // 每隻地鼠對應一個洞
+const particles = [];
+const handPoints = []; // [{x, y}]
+const handTrails = []; // 手部軌跡留痕
+
+// ─────────────────────────────────────────────
+//  Canvas 同步攝影機尺寸
+// ─────────────────────────────────────────────
+function resizeCanvases(w, h) {
+  [camCanvas, gameCanvas].forEach(c => { c.width = w; c.height = h; });
+  buildHoles();
+}
+
+function buildHoles() {
+  holes.length = 0;
+  const W = gameCanvas.width;
+  const H = gameCanvas.height;
+  if (!W || !H) return;
+
+  // 透視式排版：上方洞較小、靠後；下方洞較大、靠前
+  const usableH = H * 0.78;
+  const startY = H * 0.18;
+
+  for (let r = 0; r < HOLE_GRID.rows; r++) {
+    const t = r / (HOLE_GRID.rows - 1); // 0..1
+    const y = startY + t * usableH;
+    const sizeFactor = 0.55 + t * 0.55;             // 透視縮放
+    const horizontalInset = (1 - sizeFactor) * 0.18; // 上方往中間收
+
+    for (let c = 0; c < HOLE_GRID.cols; c++) {
+      const tc = (c + 0.5) / HOLE_GRID.cols;
+      const x = W * (horizontalInset + tc * (1 - 2 * horizontalInset));
+      const radius = Math.min(W, H) * 0.08 * sizeFactor;
+      holes.push({ x, y, radius, sizeFactor });
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+//  地鼠 / 炸彈 / 金鼠
+// ─────────────────────────────────────────────
+function spawnMole() {
+  // 找空的洞
+  const occupied = new Set(moles.map(m => m.holeIdx));
+  const available = holes.map((_, i) => i).filter(i => !occupied.has(i));
+  if (available.length === 0) return;
+
+  const idx = available[Math.floor(Math.random() * available.length)];
+  const hole = holes[idx];
+
+  const r = Math.random();
+  let type;
+  if (r < 0.12) type = 'bomb';
+  else if (r < 0.25) type = 'gold';
+  else type = 'normal';
+
+  // 上方的洞給較長的展示時間（因為較難看到）
+  const lifetime = type === 'gold'
+    ? 1100
+    : type === 'bomb'
+      ? 1800
+      : 1300 + (1 - hole.sizeFactor) * 400;
+
+  moles.push({
+    holeIdx: idx,
+    type,
+    born: performance.now(),
+    lifetime,
+    state: 'rising', // rising / showing / sinking / hit / missed
+    progress: 0,
+    points: type === 'gold' ? 50 : type === 'bomb' ? -30 : 10
+  });
+}
+
+function updateMoles(dt) {
+  const now = performance.now();
+  for (let i = moles.length - 1; i >= 0; i--) {
+    const m = moles[i];
+    const age = now - m.born;
+    const total = m.lifetime;
+
+    if (m.state === 'rising' || m.state === 'showing' || m.state === 'sinking') {
+      // 三段：上升 25% / 露出 50% / 下沉 25%
+      const t = age / total;
+      if (t < 0.25) {
+        m.state = 'rising';
+        m.progress = t / 0.25; // 0..1
+      } else if (t < 0.75) {
+        m.state = 'showing';
+        m.progress = 1;
+      } else if (t < 1) {
+        m.state = 'sinking';
+        m.progress = 1 - (t - 0.75) / 0.25; // 1..0
+      } else {
+        // 沒打到
+        if (m.type === 'normal' || m.type === 'gold') {
+          misses++;
+          updateMissDisplay();
+        }
+        moles.splice(i, 1);
+        continue;
+      }
+    } else if (m.state === 'hit') {
+      m.progress -= dt / 250;
+      if (m.progress <= 0) {
+        moles.splice(i, 1);
+      }
+    }
+  }
+}
+
+function drawHole(hole) {
+  const { x, y, radius } = hole;
+
+  // 洞陰影
+  gctx.beginPath();
+  gctx.ellipse(x, y + radius * 0.15, radius * 1.15, radius * 0.45, 0, 0, Math.PI * 2);
+  gctx.fillStyle = 'rgba(0,0,0,0.45)';
+  gctx.fill();
+
+  // 草地凸起（橢圓）
+  const grassGrad = gctx.createRadialGradient(x, y - radius * 0.2, radius * 0.2, x, y, radius * 1.2);
+  grassGrad.addColorStop(0, '#6b9a36');
+  grassGrad.addColorStop(0.6, '#4a7a22');
+  grassGrad.addColorStop(1, '#2d4d12');
+  gctx.beginPath();
+  gctx.ellipse(x, y, radius * 1.15, radius * 0.55, 0, 0, Math.PI * 2);
+  gctx.fillStyle = grassGrad;
+  gctx.fill();
+
+  // 洞口（橢圓）
+  const holeGrad = gctx.createRadialGradient(x, y, radius * 0.2, x, y, radius * 0.95);
+  holeGrad.addColorStop(0, '#0a0500');
+  holeGrad.addColorStop(0.7, '#1a0f08');
+  holeGrad.addColorStop(1, '#3a2818');
+  gctx.beginPath();
+  gctx.ellipse(x, y, radius * 0.85, radius * 0.4, 0, 0, Math.PI * 2);
+  gctx.fillStyle = holeGrad;
+  gctx.fill();
+
+  // 洞口邊緣
+  gctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  gctx.lineWidth = 2;
+  gctx.stroke();
+}
+
+function drawMole(mole) {
+  const hole = holes[mole.holeIdx];
+  if (!hole) return;
+  const { x, y, radius } = hole;
+
+  // 計算當前露出高度（progress 0..1）
+  const showHeight = radius * 1.5 * mole.progress;
+  const cx = x;
+  const cy = y - showHeight;
+  const r = radius * 0.75;
+
+  gctx.save();
+
+  // 用 clip 讓地鼠只在洞口上方可見
+  gctx.beginPath();
+  gctx.rect(x - radius * 1.2, y - radius * 3, radius * 2.4, radius * 3 - radius * 0.05);
+  gctx.clip();
+
+  if (mole.type === 'bomb') {
+    drawBomb(cx, cy, r, mole);
+  } else {
+    drawMoleBody(cx, cy, r, mole);
+  }
+
+  gctx.restore();
+
+  // hit 動畫的星星
+  if (mole.state === 'hit') {
+    const fade = mole.progress;
+    gctx.save();
+    gctx.globalAlpha = fade;
+    gctx.fillStyle = mole.type === 'bomb' ? '#e63946' : mole.type === 'gold' ? '#ffb627' : '#fff8e7';
+    gctx.font = `bold ${Math.floor(r * 0.7)}px Bungee, sans-serif`;
+    gctx.textAlign = 'center';
+    const text = mole.type === 'bomb' ? 'OUCH!' : mole.type === 'gold' ? 'WOW!' : 'HIT!';
+    gctx.fillText(text, x, y - radius - r * 0.5 - (1 - fade) * 30);
+    gctx.restore();
+  }
+}
+
+function drawMoleBody(cx, cy, r, mole) {
+  const isGold = mole.type === 'gold';
+  const bodyColor   = isGold ? '#ffb627' : '#8b5a2b';
+  const bodyShadow  = isGold ? '#b8801a' : '#5a3a1c';
+  const bellyColor  = isGold ? '#ffd166' : '#c89878';
+
+  // 身體
+  gctx.beginPath();
+  gctx.arc(cx, cy, r, 0, Math.PI * 2);
+  const grad = gctx.createRadialGradient(cx - r * 0.3, cy - r * 0.4, r * 0.2, cx, cy, r);
+  grad.addColorStop(0, isGold ? '#ffe08a' : '#a87a4b');
+  grad.addColorStop(0.6, bodyColor);
+  grad.addColorStop(1, bodyShadow);
+  gctx.fillStyle = grad;
+  gctx.fill();
+
+  // 肚子
+  gctx.beginPath();
+  gctx.ellipse(cx, cy + r * 0.25, r * 0.55, r * 0.4, 0, 0, Math.PI * 2);
+  gctx.fillStyle = bellyColor;
+  gctx.fill();
+
+  // 耳朵
+  [[-1, 0.7], [1, 0.7]].forEach(([sx]) => {
+    gctx.beginPath();
+    gctx.arc(cx + sx * r * 0.55, cy - r * 0.65, r * 0.18, 0, Math.PI * 2);
+    gctx.fillStyle = bodyShadow;
+    gctx.fill();
+  });
+
+  // 眼睛
+  [[-1], [1]].forEach(([sx]) => {
+    gctx.beginPath();
+    gctx.arc(cx + sx * r * 0.28, cy - r * 0.15, r * 0.12, 0, Math.PI * 2);
+    gctx.fillStyle = '#fff';
+    gctx.fill();
+
+    gctx.beginPath();
+    gctx.arc(cx + sx * r * 0.32, cy - r * 0.13, r * 0.06, 0, Math.PI * 2);
+    gctx.fillStyle = '#000';
+    gctx.fill();
+  });
+
+  // 鼻子
+  gctx.beginPath();
+  gctx.arc(cx, cy + r * 0.05, r * 0.1, 0, Math.PI * 2);
+  gctx.fillStyle = '#3a1a0a';
+  gctx.fill();
+
+  // 嘴巴 + 牙齒
+  gctx.beginPath();
+  gctx.moveTo(cx - r * 0.15, cy + r * 0.2);
+  gctx.lineTo(cx + r * 0.15, cy + r * 0.2);
+  gctx.strokeStyle = '#3a1a0a';
+  gctx.lineWidth = Math.max(2, r * 0.04);
+  gctx.stroke();
+
+  gctx.fillStyle = '#fff';
+  gctx.fillRect(cx - r * 0.06, cy + r * 0.2, r * 0.05, r * 0.12);
+  gctx.fillRect(cx + r * 0.01, cy + r * 0.2, r * 0.05, r * 0.12);
+
+  // 金鼠的閃光
+  if (isGold) {
+    const t = (performance.now() / 200) % (Math.PI * 2);
+    gctx.save();
+    gctx.globalAlpha = 0.6 + Math.sin(t) * 0.3;
+    gctx.beginPath();
+    gctx.arc(cx + r * 0.35, cy - r * 0.5, r * 0.08, 0, Math.PI * 2);
+    gctx.fillStyle = '#fff';
+    gctx.fill();
+    gctx.restore();
+  }
+}
+
+function drawBomb(cx, cy, r, mole) {
+  // 身體
+  const grad = gctx.createRadialGradient(cx - r * 0.3, cy - r * 0.4, r * 0.1, cx, cy, r);
+  grad.addColorStop(0, '#5a5a5a');
+  grad.addColorStop(0.6, '#2a2a2a');
+  grad.addColorStop(1, '#000');
+  gctx.beginPath();
+  gctx.arc(cx, cy, r, 0, Math.PI * 2);
+  gctx.fillStyle = grad;
+  gctx.fill();
+
+  // 引信
+  gctx.strokeStyle = '#8a6a3a';
+  gctx.lineWidth = Math.max(3, r * 0.06);
+  gctx.beginPath();
+  gctx.moveTo(cx, cy - r);
+  gctx.quadraticCurveTo(cx + r * 0.2, cy - r * 1.25, cx + r * 0.1, cy - r * 1.5);
+  gctx.stroke();
+
+  // 火花
+  const flicker = 0.7 + Math.sin(performance.now() / 60) * 0.3;
+  gctx.beginPath();
+  gctx.arc(cx + r * 0.1, cy - r * 1.5, r * 0.18 * flicker, 0, Math.PI * 2);
+  const sparkGrad = gctx.createRadialGradient(cx + r * 0.1, cy - r * 1.5, 0, cx + r * 0.1, cy - r * 1.5, r * 0.25);
+  sparkGrad.addColorStop(0, '#fff');
+  sparkGrad.addColorStop(0.4, '#ffb627');
+  sparkGrad.addColorStop(1, 'rgba(230, 57, 70, 0)');
+  gctx.fillStyle = sparkGrad;
+  gctx.fill();
+
+  // 高光
+  gctx.beginPath();
+  gctx.arc(cx - r * 0.35, cy - r * 0.4, r * 0.18, 0, Math.PI * 2);
+  gctx.fillStyle = 'rgba(255,255,255,0.3)';
+  gctx.fill();
+}
+
+// ─────────────────────────────────────────────
+//  粒子
+// ─────────────────────────────────────────────
+function spawnHitParticles(mole) {
+  const hole = holes[mole.holeIdx];
+  const cx = hole.x;
+  const cy = hole.y - hole.radius * 1.2;
+  const baseColor = mole.type === 'bomb' ? '#e63946' : mole.type === 'gold' ? '#ffb627' : '#fff8e7';
+  const count = mole.type === 'gold' ? 24 : mole.type === 'bomb' ? 20 : 14;
+
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.4;
+    const speed = 3 + Math.random() * 5;
+    particles.push({
+      x: cx, y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 2,
+      life: 1,
+      decay: 0.025,
+      size: 3 + Math.random() * 4,
+      color: baseColor
+    });
+  }
+
+  // 飄字
+  const text = mole.type === 'bomb' ? `${mole.points}` : `+${mole.points}`;
+  particles.push({
+    x: cx, y: cy,
+    vx: 0, vy: -2.5,
+    life: 1, decay: 0.018,
+    size: 0,
+    text,
+    color: baseColor
+  });
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.18;
+    p.vx *= 0.97;
+    p.life -= p.decay;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    if (p.text) {
+      gctx.save();
+      gctx.globalAlpha = p.life;
+      gctx.fillStyle = p.color;
+      gctx.font = 'bold 32px Bungee, sans-serif';
+      gctx.textAlign = 'center';
+      gctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      gctx.lineWidth = 4;
+      gctx.strokeText(p.text, p.x, p.y);
+      gctx.fillText(p.text, p.x, p.y);
+      gctx.restore();
+    } else {
+      gctx.globalAlpha = p.life;
+      gctx.beginPath();
+      gctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      gctx.fillStyle = p.color;
+      gctx.fill();
+      gctx.globalAlpha = 1;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+//  碰撞
+// ─────────────────────────────────────────────
+function checkCollisions() {
+  if (handPoints.length === 0) return;
+  const now = performance.now();
+
+  for (const mole of moles) {
+    if (mole.state === 'hit') continue;
+    // 必須露出超過一定比例才能打
+    if (mole.progress < 0.55) continue;
+
+    const hole = holes[mole.holeIdx];
+    const showHeight = hole.radius * 1.5 * mole.progress;
+    const cx = hole.x;
+    const cy = hole.y - showHeight;
+    const hitRadius = hole.radius * 0.85;
+
+    for (const hp of handPoints) {
+      const dx = hp.x - cx;
+      const dy = hp.y - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < hitRadius + 18) {
+        whackMole(mole);
+        break;
+      }
+    }
+  }
+}
+
+function whackMole(mole) {
+  mole.state = 'hit';
+  mole.progress = 1;
+
+  spawnHitParticles(mole);
+
+  if (mole.type === 'bomb') {
+    score = Math.max(0, score + mole.points);
+    misses += 2; // 打到炸彈扣命
+    updateMissDisplay();
+    if (misses >= MAX_MISSES) {
+      endGame('boom');
+      return;
+    }
+  } else {
+    score += mole.points;
+    molesWhacked++;
+    if (mole.type === 'gold') goldenWhacked++;
+  }
+
+  scoreValue.textContent = score;
+  scoreValue.classList.remove('flash');
+  void scoreValue.offsetWidth;
+  scoreValue.classList.add('flash');
+}
+
+function updateMissDisplay() {
+  missValue.textContent = `${misses}/${MAX_MISSES}`;
+  missValue.classList.remove('flash');
+  void missValue.offsetWidth;
+  missValue.classList.add('flash');
+
+  if (misses >= MAX_MISSES && gameState === 'playing') {
+    endGame('miss');
+  }
+}
+
+// ─────────────────────────────────────────────
+//  手部追蹤可視化
+// ─────────────────────────────────────────────
+function updateAndDrawHands() {
+  // 軌跡淡出
+  for (let i = handTrails.length - 1; i >= 0; i--) {
+    handTrails[i].life -= 0.05;
+    if (handTrails[i].life <= 0) handTrails.splice(i, 1);
+  }
+
+  // 加新軌跡點
+  for (const hp of handPoints) {
+    handTrails.push({ x: hp.x, y: hp.y, life: 1 });
+  }
+
+  // 畫軌跡
+  for (const t of handTrails) {
+    gctx.save();
+    gctx.globalAlpha = t.life * 0.4;
+    gctx.beginPath();
+    gctx.arc(t.x, t.y, 14 * t.life, 0, Math.PI * 2);
+    gctx.fillStyle = '#ffb627';
+    gctx.fill();
+    gctx.restore();
+  }
+
+  // 主追蹤點
+  for (const hp of handPoints) {
+    gctx.beginPath();
+    gctx.arc(hp.x, hp.y, 22, 0, Math.PI * 2);
+    gctx.fillStyle = 'rgba(255, 182, 39, 0.18)';
+    gctx.fill();
+
+    gctx.beginPath();
+    gctx.arc(hp.x, hp.y, 10, 0, Math.PI * 2);
+    gctx.fillStyle = 'rgba(255, 182, 39, 0.6)';
+    gctx.fill();
+
+    gctx.beginPath();
+    gctx.arc(hp.x, hp.y, 4, 0, Math.PI * 2);
+    gctx.fillStyle = '#fff8e7';
+    gctx.fill();
+  }
+}
+
+// ─────────────────────────────────────────────
+//  地面背景
+// ─────────────────────────────────────────────
+function drawGround() {
+  const W = gameCanvas.width;
+  const H = gameCanvas.height;
+
+  // 草地漸層（半透明，讓鏡頭微微透出）
+  const grad = gctx.createLinearGradient(0, H * 0.1, 0, H);
+  grad.addColorStop(0, 'rgba(45, 77, 18, 0.4)');
+  grad.addColorStop(0.5, 'rgba(74, 122, 34, 0.55)');
+  grad.addColorStop(1, 'rgba(74, 44, 26, 0.65)');
+  gctx.fillStyle = grad;
+  gctx.fillRect(0, H * 0.1, W, H);
+
+  // 地平線
+  gctx.strokeStyle = 'rgba(255, 248, 231, 0.06)';
+  gctx.lineWidth = 1;
+  gctx.beginPath();
+  gctx.moveTo(0, H * 0.18);
+  gctx.lineTo(W, H * 0.18);
+  gctx.stroke();
+}
+
+// ─────────────────────────────────────────────
+//  MediaPipe Hands
+// ─────────────────────────────────────────────
+const hands = new Hands({
+  locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+});
+
+hands.setOptions({
+  maxNumHands: 2,
+  modelComplexity: isMobile ? 0 : 1,
+  minDetectionConfidence: 0.6,
+  minTrackingConfidence: 0.5
+});
+
+hands.onResults(onResults);
+
+function onResults(results) {
+  const W = results.image.width;
+  const H = results.image.height;
+  if (camCanvas.width !== W || camCanvas.height !== H) {
+    resizeCanvases(W, H);
+  }
+
+  camCtx.save();
+  camCtx.clearRect(0, 0, W, H);
+  camCtx.translate(W, 0);
+  camCtx.scale(-1, 1);
+  camCtx.drawImage(results.image, 0, 0, W, H);
+  camCtx.restore();
+
+  handPoints.length = 0;
+  if (results.multiHandLandmarks) {
+    for (const lm of results.multiHandLandmarks) {
+      for (const idx of HAND_POINTS) {
+        const p = lm[idx];
+        handPoints.push({
+          x: (1 - p.x) * W,
+          y: p.y * H
+        });
+      }
+    }
+  }
+
+  statHands.textContent = results.multiHandLandmarks?.length || 0;
+
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    statFps.textContent = String(Math.round(frameCount * 1000 / (now - lastFpsTime))).padStart(2, '0');
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+}
+
+// ─────────────────────────────────────────────
+//  主迴圈
+// ─────────────────────────────────────────────
+let lastFrameTime = performance.now();
+
+function gameLoop() {
+  const now = performance.now();
+  const dt = now - lastFrameTime;
+  lastFrameTime = now;
+
+  gctx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
+
+  if (gameCanvas.width > 0) drawGround();
+
+  if (gameState === 'playing') {
+    timeLeft = Math.max(0, GAME_DURATION - (now - gameStartTime) / 1000);
+    timeValue.textContent = Math.ceil(timeLeft);
+    if (timeLeft <= 0) {
+      endGame('time');
+    }
+
+    // 動態加速
+    const elapsed = (now - gameStartTime) / 1000;
+    spawnInterval = Math.max(450, 1100 - elapsed * 12);
+    if (now - lastSpawnTime > spawnInterval) {
+      spawnMole();
+      if (elapsed > 15 && Math.random() < 0.25) {
+        setTimeout(spawnMole, 200);
+      }
+      lastSpawnTime = now;
+    }
+
+    updateMoles(dt);
+    checkCollisions();
+  }
+
+  // 畫所有洞
+  for (const hole of holes) drawHole(hole);
+
+  // 地鼠依 Y 排序，下方的後畫
+  const sortedMoles = [...moles].sort((a, b) => holes[a.holeIdx].y - holes[b.holeIdx].y);
+  for (const m of sortedMoles) drawMole(m);
+
+  updateParticles();
+  drawParticles();
+
+  if (gameState === 'playing' || gameState === 'countdown') {
+    updateAndDrawHands();
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ─────────────────────────────────────────────
+//  遊戲流程
+// ─────────────────────────────────────────────
+async function startCamera() {
+  startBtn.disabled = true;
+  errorMsg.textContent = '';
+  statStatus.textContent = 'connecting...';
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    camera = new Camera(video, {
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: video.videoWidth,
+      height: video.videoHeight
+    });
+    camera.start();
+
+    statStatus.textContent = '● live';
+    statStatus.style.color = 'var(--accent)';
+    stopBtn.style.display = '';
+
+    await new Promise(r => setTimeout(r, 500));
+    runCountdown();
+
+  } catch (err) {
+    console.error(err);
+    startBtn.disabled = false;
+    statStatus.textContent = '— error';
+    let msg = err.message || String(err);
+    if (err.name === 'NotAllowedError') msg = '鏡頭權限被拒絕。請在瀏覽器設定允許。';
+    else if (err.name === 'NotFoundError') msg = '找不到鏡頭。';
+    else if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+      msg = '需要 HTTPS 環境才能存取鏡頭。';
+    }
+    errorMsg.textContent = msg;
+  }
+}
+
+function runCountdown() {
+  startOverlay.classList.add('hidden');
+  endOverlay.classList.add('hidden');
+  gameState = 'countdown';
+
+  let n = 3;
+  countdown.classList.remove('hidden');
+  countdownNum.textContent = n;
+  countdownNum.style.animation = 'none';
+  void countdownNum.offsetWidth;
+  countdownNum.style.animation = '';
+
+  const tick = setInterval(() => {
+    n--;
+    if (n > 0) {
+      countdownNum.textContent = n;
+      countdownNum.style.animation = 'none';
+      void countdownNum.offsetWidth;
+      countdownNum.style.animation = 'countPop 1s ease forwards';
+    } else {
+      clearInterval(tick);
+      countdown.classList.add('hidden');
+      beginGame();
+    }
+  }, 1000);
+}
+
+function beginGame() {
+  gameState = 'playing';
+  score = 0;
+  misses = 0;
+  molesWhacked = 0;
+  goldenWhacked = 0;
+  timeLeft = GAME_DURATION;
+  moles.length = 0;
+  particles.length = 0;
+  handTrails.length = 0;
+  gameStartTime = performance.now();
+  lastSpawnTime = 0;
+
+  scoreValue.textContent = '0';
+  missValue.textContent = `0/${MAX_MISSES}`;
+  timeValue.textContent = GAME_DURATION;
+}
+
+function endGame(reason) {
+  gameState = 'ended';
+  finalScore.textContent = score;
+  let stat = `${molesWhacked} moles whacked`;
+  if (goldenWhacked > 0) stat += ` · ${goldenWhacked} golden`;
+  finalStats.textContent = stat;
+
+  if (reason === 'miss') endEyebrow.textContent = 'TOO MANY MISSES';
+  else if (reason === 'boom') endEyebrow.textContent = 'BOOM! GAME OVER';
+  else endEyebrow.textContent = "TIME'S UP";
+
+  endOverlay.classList.remove('hidden');
+}
+
+function quitGame() {
+  if (camera) { camera.stop(); camera = null; }
+  if (video.srcObject) {
+    video.srcObject.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+  }
+  gameState = 'idle';
+  moles.length = 0;
+  particles.length = 0;
+  handTrails.length = 0;
+  endOverlay.classList.add('hidden');
+  startOverlay.classList.remove('hidden');
+  startBtn.disabled = false;
+  stopBtn.style.display = 'none';
+  statStatus.textContent = '— idle';
+  statStatus.style.color = '';
+  statFps.textContent = '00';
+  statHands.textContent = '0';
+  scoreValue.textContent = '0';
+  missValue.textContent = `0/${MAX_MISSES}`;
+  timeValue.textContent = GAME_DURATION;
+  camCtx.clearRect(0, 0, camCanvas.width, camCanvas.height);
+}
+
+// ─────────────────────────────────────────────
+//  事件
+// ─────────────────────────────────────────────
+startBtn.addEventListener('click', startCamera);
+restartBtn.addEventListener('click', runCountdown);
+quitBtn.addEventListener('click', quitGame);
+stopBtn.addEventListener('click', quitGame);
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
